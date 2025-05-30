@@ -8,12 +8,29 @@ from config import OPENAI_API_KEY, EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_TO
 def fetch_insider_data(min_value=50000):
     url = f"http://openinsider.com/screener?s=&o=&vl={min_value}&cnt=100"
     response = requests.get(url)
-    tables = pd.read_html(response.text)
-    df = tables[11] if len(tables) > 11 else pd.DataFrame()
-    df = df[df['Trade Type'].str.contains("P - Purchase", na=False)]
-    df = df[df['Price'].apply(lambda x: isinstance(x, float) and x > 0)]
-    df = df[df['Value ($)'].apply(lambda x: isinstance(x, float) and x > min_value)]
-    df = df[df['Title'].str.contains("CEO|Pres|CFO|COO|10%", na=False)]
+
+    try:
+        tables = pd.read_html(response.text)
+    except Exception as e:
+        print(f"[错误] 读取网页失败：{e}")
+        return pd.DataFrame()
+
+    # 找包含 "Trade Type" 的表格（更稳健）
+    df = None
+    for table in tables:
+        if "Trade Type" in table.columns:
+            df = table
+            break
+
+    if df is None:
+        print("[警告] 未找到包含 'Trade Type' 的表格，网页结构可能已变")
+        return pd.DataFrame()
+
+    # 保留真实买入 + 有价格 + 高管身份 + 金额大
+    df = df[df["Trade Type"].str.contains("P - Purchase", na=False)]
+    df = df[df["Price"].apply(lambda x: isinstance(x, float) and x > 0)]
+    df = df[df["Value ($)"].apply(lambda x: isinstance(x, float) and x > min_value)]
+    df = df[df["Title"].str.contains("CEO|Pres|CFO|COO|10%", na=False)]
     return df
 
 def generate_report(df):
