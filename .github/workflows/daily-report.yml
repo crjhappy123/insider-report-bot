@@ -1,0 +1,22 @@
+name: Send Daily Insider Report
+
+on:
+  schedule:
+    - cron: '0 12 * * *'  # 每天 UTC 中午 12 点，北京时间晚上 8 点
+  workflow_dispatch:
+
+jobs:
+  insider-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python main.py
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
