@@ -16,24 +16,25 @@ def fetch_insider_data_from_finviz(min_value=50000):
         print("[错误] 未能找到 Finviz insider 表格")
         return pd.DataFrame()
 
-    rows = table.find_all("tr")[1:]  # skip header
+    rows = table.find_all("tr")[1:]  # Skip header
     data = []
     for row in rows:
         cols = [col.text.strip() for col in row.find_all("td")]
         if len(cols) < 10:
             continue
         try:
-            value_str = cols[9].replace("$", "").replace(",", "")
+            transaction_type = cols[4]  # "Transaction" 列
+            value_str = cols[7].replace("$", "").replace(",", "")
             value = float(value_str)
-            if value >= min_value and "Buy" in cols[6]:
+            if value >= min_value and "Buy" in transaction_type:
                 data.append({
                     "Ticker": cols[0],
                     "Owner": cols[1],
                     "Relationship": cols[2],
                     "Date": cols[3],
-                    "Transaction": cols[6],
-                    "Cost": cols[7],
-                    "Shares": cols[8],
+                    "Transaction": transaction_type,
+                    "Cost": cols[5],
+                    "Shares": cols[6],
                     "Value ($)": value
                 })
         except ValueError:
