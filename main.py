@@ -54,6 +54,7 @@ if __name__ == "__main__":
     df = fetch_insider_data()
     if df.empty:
         print("无有效 insider buy 数据。")
+        send_email("Insider Buy 报告：无数据", "今日未发现有效的 insider 买入记录。")
     else:
         report = generate_report(df)
         send_email("每日 Insider Buy 中文报告", report)
