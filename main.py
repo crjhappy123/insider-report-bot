@@ -1,39 +1,45 @@
-# Updated version of main.py with improved data fetching, fallback email, and updated read_html usage.
-
-from io import StringIO
 import requests
 import pandas as pd
+from bs4 import BeautifulSoup
 import openai
 import yagmail
 from config import OPENAI_API_KEY, EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_TO
 
-def fetch_insider_data(min_value=50000):
-    url = f"http://openinsider.com/screener?s=&o=&vl={min_value}&cnt=100"
-    response = requests.get(url)
-    
-    try:
-        tables = pd.read_html(StringIO(response.text))
-    except Exception as e:
-        print(f"[错误] 无法解析网页表格: {e}")
+def fetch_insider_data_from_finviz(min_value=50000):
+    url = "https://finviz.com/insidertrading.ashx"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, "html.parser")
+    table = soup.find("table", class_="body-table")
+
+    if not table:
+        print("[错误] 未能找到 Finviz insider 表格")
         return pd.DataFrame()
 
-    # 查找包含 Trade Type 的表
-    df = None
-    for table in tables:
-        if "Trade Type" in table.columns:
-            df = table
-            break
+    rows = table.find_all("tr")[1:]  # skip header
+    data = []
+    for row in rows:
+        cols = [col.text.strip() for col in row.find_all("td")]
+        if len(cols) < 10:
+            continue
+        try:
+            value_str = cols[9].replace("$", "").replace(",", "")
+            value = float(value_str)
+            if value >= min_value and "Buy" in cols[6]:
+                data.append({
+                    "Ticker": cols[0],
+                    "Owner": cols[1],
+                    "Relationship": cols[2],
+                    "Date": cols[3],
+                    "Transaction": cols[6],
+                    "Cost": cols[7],
+                    "Shares": cols[8],
+                    "Value ($)": value
+                })
+        except ValueError:
+            continue
 
-    if df is None:
-        print("[警告] 未找到包含 'Trade Type' 的表格，网页结构可能已变")
-        return pd.DataFrame()
-
-    # 精选真实 insider 买入数据
-    df = df[df["Trade Type"].str.contains("P - Purchase", na=False)]
-    df = df[df["Price"].apply(lambda x: isinstance(x, float) and x > 0)]
-    df = df[df["Value ($)"].apply(lambda x: isinstance(x, float) and x > min_value)]
-    df = df[df["Title"].str.contains("CEO|Pres|CFO|COO|10%", na=False)]
-    return df
+    return pd.DataFrame(data)
 
 def generate_report(df):
     openai.api_key = OPENAI_API_KEY
@@ -41,9 +47,7 @@ def generate_report(df):
     prompt = f"请根据以下 insider 买入数据生成一份中文分析报告：\n{sample_text}\n请写出重点个股、高管、金额，并加入简要点评。"
     response = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
+        messages=[{"role": "user", "content": prompt}],
         max_tokens=800
     )
     return response.choices[0].message["content"]
@@ -55,7 +59,7 @@ def send_email(subject, body):
     print("[成功] 邮件已发送。")
 
 if __name__ == "__main__":
-    df = fetch_insider_data()
+    df = fetch_insider_data_from_finviz()
     if df.empty:
         print("无有效 insider buy 数据。")
         send_email("Insider Buy 报告：无数据", "今日未发现有效的 insider 买入记录。")
