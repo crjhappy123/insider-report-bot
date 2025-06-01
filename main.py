@@ -1,54 +1,101 @@
-import requests
+import csv
+import os
+import smtplib
+import logging
+from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from typing import List
+
 import pandas as pd
-import openai
-import yagmail
-from config import OPENAI_API_KEY, EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_TO
+import requests
+from retry import retry
 
-def fetch_insider_data_from_openinsider(min_value=50000):
-    url = (
-        "http://openinsider.com/screener?"
-        "s=&o=&pl=&ph=&ll=&lh=&fd=1&td=0&xp=1"
-        "&vl=50000&vh=&oc=buy&sic1=&sic2=&sortcol=0"
-        "&maxresults=1000&numresults=1000&typ=1&del=1&fmt=csv"
-    )
-    try:
-        df = pd.read_csv(url)
-        df = df[df['Transaction Type'].str.contains("P - Purchase", na=False)]
-        df = df[df['Value ($)'] >= min_value]
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+OPENINSIDER_URL = "http://openinsider.com/screener.csv"
+
+class OpenInsiderScraper:
+    def __init__(self):
+        self.today = datetime.today().strftime('%Y-%m-%d')
+        self.email_config = {
+            "sender": os.getenv("EMAIL_USERNAME"),
+            "password": os.getenv("EMAIL_PASSWORD"),
+            "recipient": os.getenv("EMAIL_TO")
+        }
+        self.filename = f"insider_trades_{self.today}.csv"
+
+    @retry(tries=3, delay=5)
+    def download_csv(self):
+        logger.info("Downloading insider trade data from OpenInsider...")
+        response = requests.get(OPENINSIDER_URL)
+        if response.status_code != 200:
+            raise Exception(f"Failed to download data. Status code: {response.status_code}")
+
+        with open(self.filename, 'w', newline='', encoding='utf-8') as f:
+            f.write(response.text)
+        logger.info(f"Saved insider trades to {self.filename}")
+
+    def filter_buys(self) -> pd.DataFrame:
+        logger.info("Filtering for BUY transactions...")
+        df = pd.read_csv(self.filename)
+        df = df[df['Transaction'] == 'Buy']
+        df = df.sort_values(by='Value ($)', ascending=False)
+        df = df.reset_index(drop=True)
         return df
-    except Exception as e:
-        print(f"[错误] 获取或解析数据失败: {e}")
-        return pd.DataFrame()
 
-def generate_report(df):
-    openai.api_key = OPENAI_API_KEY
-    sample_text = df[['Ticker', 'Owner', 'Title', 'Trade Date', 'Price', 'Qty', 'Value ($)']].head(10).to_string(index=False)
-    prompt = (
-        f"请根据以下 insider 买入数据生成一份简明中文分析报告：\n\n{sample_text}\n\n"
-        f"请写出重点股票、职位、买入金额，并用简洁的口吻总结可能影响市场的动向。"
-    )
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=800
-        )
-        return response.choices[0].message["content"]
-    except Exception as e:
-        return f"[错误] 调用 ChatGPT 失败：{e}"
+    def format_report(self, df: pd.DataFrame) -> str:
+        logger.info("Formatting email report...")
+        if df.empty:
+            return "今天没有发现 insider 买入交易。"
 
-def send_email(subject, body):
-    print("[调试] 准备发送邮件...")
-    yag = yagmail.SMTP(EMAIL_USERNAME, EMAIL_PASSWORD)
-    yag.send(to=EMAIL_TO, subject=subject, contents=body)
-    print("[成功] 邮件已发送。")
+        lines = [
+            f"日期: {self.today}",
+            f"发现 {len(df)} 笔 insider 买入交易:",
+            ""
+        ]
+        for _, row in df.iterrows():
+            lines.append(
+                f"{row['Ticker']} | {row['Owner']} ({row['Relationship']}) | {row['Date']} | 买入 {row['#Shares']} 股 @ ${row['Cost']} | 价值 ${row['Value ($)']}"
+            )
+        return "\n".join(lines)
 
-if __name__ == "__main__":
-    df = fetch_insider_data_from_openinsider()
-    if df.empty:
-        print("无有效 insider buy 数据。")
-        send_email("Insider Buy 报告：无数据", "今日未发现有效的 insider 买入记录。")
-    else:
-        report = generate_report(df)
-        send_email("每日 Insider Buy 中文报告", report)
-        print("已发送邮件。")
+    def send_email(self, content: str):
+        logger.info("Sending email report...")
+        sender = self.email_config["sender"]
+        recipient = self.email_config["recipient"]
+        password = self.email_config["password"]
+
+        if not all([sender, recipient, password]):
+            raise ValueError("Missing email credentials in environment variables.")
+
+        msg = MIMEMultipart()
+        msg['From'] = sender
+        msg['To'] = recipient
+        msg['Subject'] = f"每日Insider买入报告 - {self.today}"
+
+        msg.attach(MIMEText(content, 'plain'))
+
+        try:
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(sender, password)
+            server.send_message(msg)
+            server.quit()
+            logger.info("Email sent successfully.")
+        except Exception as e:
+            logger.error(f"Failed to send email: {str(e)}")
+
+    def run(self):
+        try:
+            self.download_csv()
+            df_buys = self.filter_buys()
+            report = self.format_report(df_buys)
+            self.send_email(report)
+        except Exception as e:
+            logger.error(f"Critical error: {e}")
+
+if __name__ == '__main__':
+    scraper = OpenInsiderScraper()
+    scraper.run()
