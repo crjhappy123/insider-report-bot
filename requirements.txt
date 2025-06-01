@@ -1,5 +1,6 @@
-requests
 pandas
-openai
-yagmail
+requests
 beautifulsoup4
+fake_useragent
+tqdm
+yagmail
