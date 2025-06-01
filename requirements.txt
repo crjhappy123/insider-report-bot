@@ -4,3 +4,4 @@ beautifulsoup4
 fake_useragent
 tqdm
 yagmail
+pyyaml 
