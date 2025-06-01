@@ -15,6 +15,7 @@ filters:
   transaction_types:
     - P - Purchase
   min_shares_traded: 100
+  exclude_companies: []
 
 cache:
   enabled: false
